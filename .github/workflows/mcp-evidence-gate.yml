@@ -16,7 +16,7 @@ jobs:
 
       - name: Verify release evidence
         id: evidence
-        uses: yandexuanxuan/mcp-evidence-gate@cf9a76a7c600ac238be81403aebc0c212e7460ab
+        uses: yandexuanxuan/mcp-evidence-gate@13bd12875a2d9381b518c0b543549ca89cbc42b8
         with:
           receipt: evidence/receipt.json
           artifact: dist/example-artifact.bin
