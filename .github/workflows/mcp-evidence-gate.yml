@@ -1,0 +1,30 @@
+name: MCP Evidence Gate Dogfood
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-evidence:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release evidence
+        id: evidence
+        uses: yandexuanxuan/mcp-evidence-gate@cf9a76a7c600ac238be81403aebc0c212e7460ab
+        with:
+          receipt: evidence/receipt.json
+          artifact: dist/example-artifact.bin
+          policy: permissive
+
+      - name: Show evidence outputs
+        if: always()
+        run: |
+          echo "decision=${{ steps.evidence.outputs.decision }}"
+          echo "receipt-verdict=${{ steps.evidence.outputs.receipt-verdict }}"
+          echo "profile=${{ steps.evidence.outputs.profile }}"
