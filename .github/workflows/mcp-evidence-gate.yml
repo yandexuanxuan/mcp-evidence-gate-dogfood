@@ -36,7 +36,7 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@85943698f82639ec40e19a57e2ee74a0958574b0
+        uses: yandexuanxuan/mcp-evidence-gate@7b1569284e321976b4b61378c223ce6a28fbdb9b
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
