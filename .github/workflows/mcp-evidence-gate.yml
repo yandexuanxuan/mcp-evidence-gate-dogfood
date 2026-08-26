@@ -10,21 +10,42 @@ permissions:
 jobs:
   verify-evidence:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: matching-clean
+            receipt: evidence/clean/receipt.json
+            expected: pass
+          - name: digest-mismatch
+            receipt: evidence/inconclusive/receipt.json
+            expected: inconclusive
+          - name: stale
+            receipt: evidence/inconclusive/stale.json
+            expected: inconclusive
+          - name: findings
+            receipt: evidence/fail/findings.json
+            expected: fail
+          - name: malformed-receipt
+            receipt: evidence/fail/malformed.json
+            expected: fail
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify release evidence
+      - name: Verify ${{ matrix.name }}
         id: evidence
-        uses: yandexuanxuan/mcp-evidence-gate@13bd12875a2d9381b518c0b543549ca89cbc42b8
+        continue-on-error: true
+        uses: yandexuanxuan/mcp-evidence-gate@85943698f82639ec40e19a57e2ee74a0958574b0
         with:
-          receipt: evidence/receipt.json
+          receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
           policy: permissive
 
-      - name: Show evidence outputs
+      - name: Assert expected decision
         if: always()
         run: |
           echo "decision=${{ steps.evidence.outputs.decision }}"
           echo "receipt-verdict=${{ steps.evidence.outputs.receipt-verdict }}"
           echo "profile=${{ steps.evidence.outputs.profile }}"
+          test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected }}"

@@ -1,0 +1,9 @@
+{
+  "scanner": "dogfood-example-scanner",
+  "scanned_artifact_digest": "sha256:2cc9ce4ecc42ab8681853bd2e5ee4356e7dccf3033d45818df4b135c7f386b9e",
+  "scan_scope": ["package"],
+  "verdict": "clean",
+  "scanned_at": "2026-08-24T00:00:00Z",
+  "freshness_expires_at": "2026-08-24T23:59:59Z",
+  "attestation": "publisher-asserted"
+}
