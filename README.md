@@ -20,7 +20,7 @@ The workflow uses `continue-on-error: true` for the Action step because `FAIL` a
 
 The workflow runs on pushes and manual dispatch:
 
-- `.github/workflows/mcp-evidence-gate.yml` calls `yandexuanxuan/mcp-evidence-gate@7b1569284e321976b4b61378c223ce6a28fbdb9b` (the `v0.1.0-alpha.1` release commit).
+- `.github/workflows/mcp-evidence-gate.yml` calls `yandexuanxuan/mcp-evidence-gate@b8cacb5eadca53c8b9a1e8d5c8ac956fd579238d` (the `v0.1.0-alpha.2` release commit).
 - `dist/example-artifact.bin` is marked as binary in `.gitattributes` so Windows line-ending conversion cannot change its digest.
 - Receipts live under `evidence/` and are intentionally small, deterministic fixtures.
 
