@@ -16,19 +16,24 @@ jobs:
         include:
           - name: matching-clean
             receipt: evidence/clean/receipt.json
-            expected: pass
+            expected_decision: pass
+            expected_outcome: success
           - name: digest-mismatch
             receipt: evidence/inconclusive/receipt.json
-            expected: inconclusive
+            expected_decision: inconclusive
+            expected_outcome: failure
           - name: stale
             receipt: evidence/inconclusive/stale.json
-            expected: inconclusive
+            expected_decision: inconclusive
+            expected_outcome: failure
           - name: findings
             receipt: evidence/fail/findings.json
-            expected: fail
+            expected_decision: fail
+            expected_outcome: failure
           - name: malformed-receipt
             receipt: evidence/fail/malformed.json
-            expected: fail
+            expected_decision: fail
+            expected_outcome: failure
 
     steps:
       - uses: actions/checkout@v4
@@ -48,4 +53,6 @@ jobs:
           echo "decision=${{ steps.evidence.outputs.decision }}"
           echo "receipt-verdict=${{ steps.evidence.outputs.receipt-verdict }}"
           echo "profile=${{ steps.evidence.outputs.profile }}"
-          test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected }}"
+          echo "outcome=${{ steps.evidence.outcome }}"
+          test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected_decision }}"
+          test "${{ steps.evidence.outcome }}" = "${{ matrix.expected_outcome }}"

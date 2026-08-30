@@ -14,7 +14,7 @@ This repository is an executable specification for downstream consumers. It keep
 | findings receipt | `FAIL` | The scanner reported findings. |
 | malformed receipt | `FAIL` | The receipt fails structural conformance. |
 
-The workflow uses `continue-on-error: true` for the Action step because `FAIL` and `INCONCLUSIVE` are intentional test outcomes. A following assertion checks the emitted `decision`, so the workflow remains green only when fail-closed behavior is correct.
+The workflow uses `continue-on-error: true` for the Action step because `FAIL` and `INCONCLUSIVE` are intentional test outcomes. A following assertion checks both the emitted `decision` and the GitHub Actions step `outcome`. `PASS` must produce a successful step; `FAIL` and `INCONCLUSIVE` must produce a failed Action step. The workflow is green only when both values match the matrix.
 
 ## Workflow
 
