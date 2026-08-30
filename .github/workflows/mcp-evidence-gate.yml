@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   verify-evidence:
+    name: verify-evidence (${{ matrix.name }}, ${{ matrix.receipt }}, ${{ matrix.expected_decision }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
