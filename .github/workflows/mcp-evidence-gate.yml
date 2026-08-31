@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   verify-evidence:
-    name: verify-evidence (${{ matrix.name }}, ${{ matrix.receipt }}, ${{ matrix.expected_decision }})
+    name: case (${{ matrix.name }}, ${{ matrix.receipt }}, ${{ matrix.expected_decision }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -108,3 +108,60 @@ jobs:
           test "${{ steps.evidence.outputs.receipt-verdict }}" = "${{ matrix.expected_verdict }}"
           test "${{ steps.evidence.outputs.profile }}" = "registry-pr-1404@20747d3253ba8638161dd95f1cec70df02993c22"
           test "${{ steps.evidence.outcome }}" = "${{ matrix.expected_outcome }}"
+
+  real-trivy-promotion:
+    name: real-trivy-promotion
+    uses: ./.github/workflows/real-trivy-producer.yml
+
+  promotion-gate:
+    name: promotion-gate
+    if: always()
+    needs:
+      - verify-evidence
+      - real-trivy-promotion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all declared acceptance evidence
+        env:
+          MATRIX_RESULT: ${{ needs.verify-evidence.result }}
+          REAL_TRIVY_RESULT: ${{ needs.real-trivy-promotion.result }}
+        run: |
+          set -euo pipefail
+          echo "deterministic_matrix=$MATRIX_RESULT"
+          echo "real_trivy_consumer=$REAL_TRIVY_RESULT"
+          test "$MATRIX_RESULT" = success
+          test "$REAL_TRIVY_RESULT" = success
+
+  legacy-required-context-anchor:
+    if: always()
+    needs:
+      - promotion-gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: matching-clean
+            receipt: evidence/clean/receipt.json
+            expected_decision: pass
+          - name: digest-mismatch
+            receipt: evidence/inconclusive/receipt.json
+            expected_decision: inconclusive
+          - name: stale
+            receipt: evidence/inconclusive/stale.json
+            expected_decision: inconclusive
+          - name: findings
+            receipt: evidence/fail/findings.json
+            expected_decision: fail
+          - name: malformed-receipt
+            receipt: evidence/fail/malformed.json
+            expected_decision: fail
+    name: verify-evidence (${{ matrix.name }}, ${{ matrix.receipt }}, ${{ matrix.expected_decision }})
+    steps:
+      - name: Bridge existing branch protection to full promotion gate
+        env:
+          PROMOTION_GATE_RESULT: ${{ needs.promotion-gate.result }}
+        run: |
+          set -euo pipefail
+          echo "promotion_gate=$PROMOTION_GATE_RESULT"
+          test "$PROMOTION_GATE_RESULT" = success
