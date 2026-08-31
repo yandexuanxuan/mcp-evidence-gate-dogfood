@@ -1,0 +1,45 @@
+{
+  "schema_version": "promotion-gates-v1",
+  "base_branch": "main",
+  "acceptance_evidence": {
+    "deterministic_matrix": {
+      "workflow": ".github/workflows/mcp-evidence-gate.yml",
+      "required_case_count": 11
+    },
+    "real_trivy_consumer": {
+      "workflow": ".github/workflows/real-trivy-producer.yml",
+      "producer_sha": "c831705f6aed062127ca4a72ba82c738831e49d4",
+      "gate_sha": "d404b38f0ac0303438b561fe7358b0eec487c962",
+      "trivy_version": "0.74.0"
+    }
+  },
+  "promotion_gate": {
+    "job_name": "promotion-gate",
+    "must_require": [
+      "deterministic_matrix",
+      "real_trivy_consumer"
+    ]
+  },
+  "legacy_required_context_bridge": {
+    "reason": "Existing branch protection requires five historical matrix context names. Those names are preserved as downstream anchors so none can succeed unless the full promotion gate succeeds.",
+    "contexts": [
+      "verify-evidence (matching-clean, evidence/clean/receipt.json, pass)",
+      "verify-evidence (digest-mismatch, evidence/inconclusive/receipt.json, inconclusive)",
+      "verify-evidence (stale, evidence/inconclusive/stale.json, inconclusive)",
+      "verify-evidence (findings, evidence/fail/findings.json, fail)",
+      "verify-evidence (malformed-receipt, evidence/fail/malformed.json, fail)"
+    ],
+    "migration_target": "Replace legacy anchors with a single required promotion-gate context when repository settings governance is updated."
+  },
+  "runtime_evidence_retention": {
+    "artifact_name_prefix": "real-trivy-runtime-evidence-",
+    "retention_days": 90,
+    "files": [
+      "runtime-evidence-manifest.json",
+      "receipt.json",
+      "evidence.json",
+      "trivy.raw.json",
+      "trivy.stderr.log"
+    ]
+  }
+}
