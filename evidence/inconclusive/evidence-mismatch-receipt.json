@@ -1,0 +1,9 @@
+{
+  "scanner": "dogfood-example-scanner",
+  "scanned_artifact_digest": "sha256:2cc9ce4ecc42ab8681853bd2e5ee4356e7dccf3033d45818df4b135c7f386b9e",
+  "evidence_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "scan_scope": ["package"],
+  "verdict": "clean",
+  "scanned_at": "2026-08-25T00:00:00Z",
+  "attestation": "publisher-asserted"
+}

@@ -57,6 +57,20 @@ jobs:
             expected_decision: fail
             expected_outcome: failure
             expected_verdict: clean
+          - name: explicit-evidence-match-permissive
+            receipt: evidence/clean/evidence-match-receipt.json
+            evidence: evidence/clean/evidence-report.json
+            policy: permissive
+            expected_decision: pass
+            expected_verdict: clean
+            expected_outcome: success
+          - name: explicit-evidence-mismatch-permissive
+            receipt: evidence/inconclusive/evidence-mismatch-receipt.json
+            evidence: evidence/clean/evidence-report.json
+            policy: permissive
+            expected_decision: inconclusive
+            expected_verdict: clean
+            expected_outcome: failure
 
     steps:
       - uses: actions/checkout@v4
@@ -64,11 +78,12 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@534afe675e27986e496cd68fb0c678525de2d124
+        uses: yandexuanxuan/mcp-evidence-gate@df9f505f1da56e05b1de53c809dd8316ef125ef6
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
           policy: ${{ matrix.policy }}
+          evidence: ${{ matrix.evidence }}
 
       - name: Assert expected decision
         if: always()

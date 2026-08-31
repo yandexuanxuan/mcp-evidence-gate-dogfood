@@ -15,6 +15,8 @@ This repository is an executable specification for downstream consumers. It keep
 | stale receipt | `INCONCLUSIVE` | The evidence freshness window has expired. |
 | findings receipt | `FAIL` | The scanner reported findings. |
 | malformed receipt | `FAIL` | The receipt fails structural conformance. |
+| explicit evidence match (permissive) | `PASS` | Bound artifact and locally verified evidence report satisfy permissive policy; Action succeeds. |
+| explicit evidence mismatch (permissive) | `INCONCLUSIVE` | Explicitly supplied evidence report fails digest binding even under optional policy; Action fails. |
 
 The workflow uses `continue-on-error: true` for the Action step because `FAIL` and `INCONCLUSIVE` are intentional test outcomes. A following assertion checks both the emitted `decision` and the GitHub Actions step `outcome`. `PASS` must produce a successful step; `FAIL` and `INCONCLUSIVE` must produce a failed Action step. The workflow is green only when both values match the matrix.
 
@@ -22,7 +24,7 @@ The workflow uses `continue-on-error: true` for the Action step because `FAIL` a
 
 The workflow runs on pushes and manual dispatch:
 
-- `.github/workflows/mcp-evidence-gate.yml` calls the reviewed Action head `534afe675e27986e496cd68fb0c678525de2d124` by full immutable commit SHA.
+- `.github/workflows/mcp-evidence-gate.yml` calls the reviewed Action head `df9f505f1da56e05b1de53c809dd8316ef125ef6` by full immutable commit SHA.
 - `dist/example-artifact.bin` is marked as binary in `.gitattributes` so Windows line-ending conversion cannot change its digest.
 - Receipts live under `evidence/` and are intentionally small, deterministic fixtures.
 
