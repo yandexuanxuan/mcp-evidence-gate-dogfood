@@ -113,24 +113,32 @@ jobs:
     name: real-trivy-promotion
     uses: ./.github/workflows/real-trivy-producer.yml
 
+  real-osv-promotion:
+    name: real-osv-promotion
+    uses: ./.github/workflows/real-osv-producer.yml
+
   promotion-gate:
     name: promotion-gate
     if: always()
     needs:
       - verify-evidence
       - real-trivy-promotion
+      - real-osv-promotion
     runs-on: ubuntu-latest
     steps:
       - name: Require all declared acceptance evidence
         env:
           MATRIX_RESULT: ${{ needs.verify-evidence.result }}
           REAL_TRIVY_RESULT: ${{ needs.real-trivy-promotion.result }}
+          REAL_OSV_RESULT: ${{ needs.real-osv-promotion.result }}
         run: |
           set -euo pipefail
           echo "deterministic_matrix=$MATRIX_RESULT"
           echo "real_trivy_consumer=$REAL_TRIVY_RESULT"
+          echo "real_osv_consumer=$REAL_OSV_RESULT"
           test "$MATRIX_RESULT" = success
           test "$REAL_TRIVY_RESULT" = success
+          test "$REAL_OSV_RESULT" = success
 
   legacy-required-context-anchor:
     if: always()
