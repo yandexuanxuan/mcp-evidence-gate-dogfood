@@ -73,19 +73,23 @@ jobs:
           import json
           import os
           import sys
+          from pathlib import Path
 
           artifact_digest, evidence_digest, receipt_digest, raw_report_digest, receipt_verdict, scanner_exit, source_types, output_dir, manifest_path = sys.argv[1:]
           receipt = json.load(open(f"{output_dir}/receipt.json", encoding="utf-8"))
           evidence = json.load(open(f"{output_dir}/evidence.json", encoding="utf-8"))
           raw = json.load(open(f"{output_dir}/osv.raw.json", encoding="utf-8"))
+          expected_artifact = (Path(os.environ["GITHUB_WORKSPACE"]) / "evidence/real-trivy/requirements.txt").resolve()
 
           assert receipt["scanner"] == "osv-scanner"
           assert receipt["scanner_version"] == os.environ["OSV_VERSION"]
           assert receipt["scanned_artifact_digest"] == artifact_digest
+          assert Path(receipt["scanned_artifact_ref"]).resolve() == expected_artifact
           assert receipt["evidence_digest"] == evidence_digest
           assert receipt["verdict"] == receipt_verdict
           assert receipt_verdict in {"clean", "findings"}
           assert evidence["artifact"]["sha256"] == artifact_digest.removeprefix("sha256:")
+          assert Path(evidence["artifact"]["ref"]).resolve() == expected_artifact
           assert evidence["raw_report"]["sha256"] == raw_report_digest.removeprefix("sha256:")
           assert evidence["scanner"]["name"] == "osv-scanner"
           assert evidence["scanner"]["version"] == os.environ["OSV_VERSION"]
@@ -95,7 +99,13 @@ jobs:
           assert evidence["scanner_database"]["snapshot"] == "unavailable"
           assert int(scanner_exit) in {0, 1}
           assert isinstance(raw.get("results"), list) and raw["results"]
-          assert all(r.get("source", {}).get("path") for r in raw["results"])
+
+          sources = [result.get("source", {}) for result in raw["results"]]
+          assert all(Path(source["path"]).resolve() == expected_artifact for source in sources)
+          observed_source_types = {source.get("type") for source in sources}
+          assert observed_source_types <= {"lockfile", "unknown"}
+          assert "lockfile" in observed_source_types
+          assert observed_source_types == set(source_types.split(","))
 
           manifest = {
               "schema_version": "dogfood-runtime-evidence-v1",
@@ -110,7 +120,7 @@ jobs:
               "receipt_digest": receipt_digest,
               "receipt_verdict": receipt_verdict,
               "scanner_exit_code": int(scanner_exit),
-              "source_types": source_types.split(",") if source_types else [],
+              "source_types": sorted(observed_source_types),
               "scanner_database": evidence["scanner_database"],
           }
           with open(manifest_path, "w", encoding="utf-8") as f:
