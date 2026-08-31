@@ -4,6 +4,6 @@
   "scan_scope": ["package", "handler-validation"],
   "verdict": "warnings",
   "scanned_at": "2026-08-25T00:00:00Z",
-  "freshness_expires_at": "2026-08-26T00:00:00Z",
+  "freshness_expires_at": "2099-01-01T00:00:00Z",
   "attestation": "third-party-attested"
 }
