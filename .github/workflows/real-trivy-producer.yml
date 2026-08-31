@@ -1,6 +1,7 @@
 name: Real Trivy Producer Consumer
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     paths:
@@ -64,24 +65,56 @@ jobs:
           out="$RUNNER_TEMP/producer-out"
           artifact_digest="sha256:$(sha256sum "$artifact" | cut -d ' ' -f 1)"
           evidence_digest="sha256:$(sha256sum "$out/evidence.json" | cut -d ' ' -f 1)"
+          receipt_digest="sha256:$(sha256sum "$out/receipt.json" | cut -d ' ' -f 1)"
+          raw_report_digest="sha256:$(sha256sum "$out/trivy.raw.json" | cut -d ' ' -f 1)"
           receipt_verdict="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["verdict"])' "$out/receipt.json")"
-          python - "$artifact_digest" "$evidence_digest" "$receipt_verdict" "$out" <<'PY'
+          db_digest="$(python -c 'import json,sys; v=json.load(open(sys.argv[1], encoding="utf-8")).get("scanner_database",{}).get("trivy_db_sha256"); print("sha256:"+v if v and not v.startswith("sha256:") else (v or "UNKNOWN"))' "$out/evidence.json")"
+          python - "$artifact_digest" "$evidence_digest" "$receipt_digest" "$raw_report_digest" "$receipt_verdict" "$db_digest" "$out" "$RUNNER_TEMP/runtime-evidence-manifest.json" <<'PY'
           import json
+          import os
           import sys
-          artifact_digest, evidence_digest, receipt_verdict, output_dir = sys.argv[1:]
+
+          artifact_digest, evidence_digest, receipt_digest, raw_report_digest, receipt_verdict, db_digest, output_dir, manifest_path = sys.argv[1:]
           receipt = json.load(open(f"{output_dir}/receipt.json", encoding="utf-8"))
           evidence = json.load(open(f"{output_dir}/evidence.json", encoding="utf-8"))
+          raw = json.load(open(f"{output_dir}/trivy.raw.json", encoding="utf-8"))
+
           assert receipt["scanned_artifact_digest"] == artifact_digest
           assert receipt["evidence_digest"] == evidence_digest
           assert receipt["verdict"] == receipt_verdict
           assert receipt_verdict in {"clean", "warnings", "findings", "inconclusive"}
           assert evidence["artifact"]["sha256"] == artifact_digest.removeprefix("sha256:")
+          assert evidence["raw_report"]["sha256"] == raw_report_digest.removeprefix("sha256:")
           assert evidence["scanner"]["name"] == "trivy"
           assert evidence["scanner"]["version"] == "0.74.0"
+          assert isinstance(raw, dict)
+
+          manifest = {
+              "schema_version": "dogfood-runtime-evidence-v1",
+              "dogfood_commit": os.environ["GITHUB_SHA"],
+              "producer_commit": os.environ["PRODUCER_SHA"],
+              "gate_commit": os.environ["GATE_SHA"],
+              "trivy_version": os.environ["TRIVY_VERSION"],
+              "trivy_archive_sha256": "sha256:" + os.environ["TRIVY_ARCHIVE_SHA256"],
+              "trivy_executable_sha256": "sha256:" + os.environ["TRIVY_EXECUTABLE_SHA256"],
+              "artifact_digest": artifact_digest,
+              "raw_report_digest": raw_report_digest,
+              "evidence_digest": evidence_digest,
+              "receipt_digest": receipt_digest,
+              "trivy_db_digest": db_digest,
+              "receipt_verdict": receipt_verdict,
+              "scanner_database_metadata": evidence.get("scanner_database", {}).get("metadata"),
+          }
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+              f.write("\n")
           PY
           {
             echo "artifact_digest=$artifact_digest"
+            echo "raw_report_digest=$raw_report_digest"
             echo "evidence_digest=$evidence_digest"
+            echo "receipt_digest=$receipt_digest"
+            echo "db_digest=$db_digest"
             echo "receipt_verdict=$receipt_verdict"
           } >> "$GITHUB_OUTPUT"
 
@@ -119,6 +152,17 @@ jobs:
           test "$ACTUAL_VERDICT" = "$PRODUCER_VERDICT"
           test "$ACTUAL_DECISION" = "$expected_decision"
           test "$ACTUAL_OUTCOME" = "$expected_outcome"
+          python - "$RUNNER_TEMP/runtime-evidence-manifest.json" "$ACTUAL_DECISION" "$ACTUAL_OUTCOME" <<'PY'
+          import json
+          import sys
+          path, decision, outcome = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          data["gate_decision"] = decision
+          data["gate_step_outcome"] = outcome
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
           {
             echo "## Real Trivy producer-consumer evidence"
             echo
@@ -128,8 +172,25 @@ jobs:
             echo "| Gate commit | \`$GATE_SHA\` |"
             echo "| Trivy | \`$TRIVY_VERSION\` |"
             echo "| Artifact digest | \`${{ steps.facts.outputs.artifact_digest }}\` |"
+            echo "| Raw report digest | \`${{ steps.facts.outputs.raw_report_digest }}\` |"
             echo "| Evidence digest | \`${{ steps.facts.outputs.evidence_digest }}\` |"
+            echo "| Receipt digest | \`${{ steps.facts.outputs.receipt_digest }}\` |"
+            echo "| Trivy DB digest | \`${{ steps.facts.outputs.db_digest }}\` |"
             echo "| Receipt verdict | \`$PRODUCER_VERDICT\` |"
             echo "| Gate decision | \`$ACTUAL_DECISION\` |"
             echo "| Gate step outcome | \`$ACTUAL_OUTCOME\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime evidence bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: real-trivy-runtime-evidence-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/runtime-evidence-manifest.json
+            ${{ runner.temp }}/producer-out/receipt.json
+            ${{ runner.temp }}/producer-out/evidence.json
+            ${{ runner.temp }}/producer-out/trivy.raw.json
+            ${{ runner.temp }}/producer-out/trivy.stderr.log
