@@ -42,7 +42,15 @@
     "migration_target": "Replace legacy anchors with a single required promotion-gate context when repository settings governance is updated."
   },
   "runtime_evidence_retention": {
+    "artifact_name_prefix": "real-trivy-runtime-evidence-",
     "retention_days": 90,
+    "files": [
+      "runtime-evidence-manifest.json",
+      "receipt.json",
+      "evidence.json",
+      "trivy.raw.json",
+      "trivy.stderr.log"
+    ],
     "bundles": {
       "real_trivy": {
         "artifact_name_prefix": "real-trivy-runtime-evidence-",
