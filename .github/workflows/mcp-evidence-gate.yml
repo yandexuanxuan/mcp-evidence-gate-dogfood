@@ -78,7 +78,7 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@df9f505f1da56e05b1de53c809dd8316ef125ef6
+        uses: yandexuanxuan/mcp-evidence-gate@b920a9d20278474dbc2060d416a75b35ea52a7eb
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
@@ -94,5 +94,5 @@ jobs:
           echo "outcome=${{ steps.evidence.outcome }}"
           test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected_decision }}"
           test "${{ steps.evidence.outputs.receipt-verdict }}" = "${{ matrix.expected_verdict }}"
-          test -n "${{ steps.evidence.outputs.profile }}"
+          test "${{ steps.evidence.outputs.profile }}" = "registry-pr-1404@20747d3253ba8638161dd95f1cec70df02993c22"
           test "${{ steps.evidence.outcome }}" = "${{ matrix.expected_outcome }}"
