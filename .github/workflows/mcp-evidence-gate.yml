@@ -71,6 +71,18 @@ jobs:
             expected_decision: inconclusive
             expected_verdict: clean
             expected_outcome: failure
+          - name: malformed-optional-evidence-digest
+            receipt: evidence/fail/malformed-optional-evidence-digest.json
+            policy: permissive
+            expected_decision: fail
+            expected_verdict: clean
+            expected_outcome: failure
+          - name: unrequested-unsupported-evidence-digest
+            receipt: evidence/clean/unrequested-unsupported-evidence-digest.json
+            policy: permissive
+            expected_decision: pass
+            expected_verdict: clean
+            expected_outcome: success
 
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +90,7 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@b920a9d20278474dbc2060d416a75b35ea52a7eb
+        uses: yandexuanxuan/mcp-evidence-gate@9bed76881fa040c78618c23d911664e919ad90cf
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
