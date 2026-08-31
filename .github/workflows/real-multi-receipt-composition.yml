@@ -1,0 +1,356 @@
+name: Real Multi-Receipt Composition
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/real-multi-receipt-composition.yml
+      - evidence/real-trivy/requirements.txt
+
+permissions:
+  contents: read
+
+jobs:
+  real-multi-receipt-composition:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCER_REVIEWED_SHA: 3a65d011e21efab79d758ec9b82b788ece5cfe6a
+      PRODUCER_MERGE_SHA: 5fa319ece84dc699ca251e9199c54b14ad838207
+      CORE_REVIEWED_SHA: b12a3615297556c6d4e86f741e223488a658da8a
+      CORE_MERGE_SHA: d5abcdc28d6e288da15ec69b16901ec604da5617
+      TRIVY_VERSION: 0.74.0
+      TRIVY_ARCHIVE_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+      TRIVY_EXECUTABLE_SHA256: d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791
+      OSV_VERSION: 2.5.1
+      OSV_EXECUTABLE_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+      EVALUATED_AT: 2026-09-01T00:00:00Z
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: false
+
+      - name: Download and verify pinned scanners
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl -fsSL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_ARCHIVE_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP"
+          echo "${TRIVY_EXECUTABLE_SHA256}  $RUNNER_TEMP/trivy" | sha256sum --check --strict
+          test "$("$RUNNER_TEMP/trivy" --version | sed -n 's/^Version: //p')" = "$TRIVY_VERSION"
+
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_EXECUTABLE_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          actual_osv_version="$("$RUNNER_TEMP/osv-scanner" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          test "$actual_osv_version" = "$OSV_VERSION"
+
+      - name: Check out immutable reviewed producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/yandexuanxuan/mcp-evidence-producer-trivy.git "$RUNNER_TEMP/producer"
+          git -C "$RUNNER_TEMP/producer" checkout --detach "$PRODUCER_REVIEWED_SHA"
+          test "$(git -C "$RUNNER_TEMP/producer" rev-parse HEAD)" = "$PRODUCER_REVIEWED_SHA"
+
+      - name: Produce independent Trivy and OSV receipts for one consumer artifact
+        shell: bash
+        working-directory: ${{ runner.temp }}/producer
+        run: |
+          set -euo pipefail
+          artifact="$GITHUB_WORKSPACE/evidence/real-trivy/requirements.txt"
+          python -m src.producer \
+            --trivy "$RUNNER_TEMP/trivy" \
+            --artifact "$artifact" \
+            --out "$RUNNER_TEMP/trivy-out"
+          python -m src.osv_producer \
+            --osv "$RUNNER_TEMP/osv-scanner" \
+            --artifact "$artifact" \
+            --out "$RUNNER_TEMP/osv-out"
+
+      - name: Check out and build immutable composed consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/yandexuanxuan/mcp-evidence-gate.git "$RUNNER_TEMP/core"
+          git -C "$RUNNER_TEMP/core" checkout --detach "$CORE_MERGE_SHA"
+          test "$(git -C "$RUNNER_TEMP/core" rev-parse HEAD)" = "$CORE_MERGE_SHA"
+          pnpm --dir "$RUNNER_TEMP/core" install --frozen-lockfile
+          pnpm --dir "$RUNNER_TEMP/core" build
+
+      - name: Verify singles, compose the set, and independently assert semantics
+        id: composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="$GITHUB_WORKSPACE/evidence/real-trivy/requirements.txt"
+          core="$RUNNER_TEMP/core/dist/cli.js"
+
+          cat > "$RUNNER_TEMP/receipt-set.json" <<'JSON'
+          {
+            "schema_version": "project-defined-receipt-set-v1",
+            "receipts": [
+              {
+                "id": "trivy",
+                "receipt": "trivy-out/receipt.json",
+                "evidence": "trivy-out/evidence.json"
+              },
+              {
+                "id": "osv",
+                "receipt": "osv-out/receipt.json",
+                "evidence": "osv-out/evidence.json"
+              }
+            ]
+          }
+          JSON
+
+          set +e
+          node "$core" verify \
+            --receipt "$RUNNER_TEMP/trivy-out/receipt.json" \
+            --artifact "$artifact" \
+            --evidence "$RUNNER_TEMP/trivy-out/evidence.json" \
+            --policy permissive \
+            --format json \
+            --now "$EVALUATED_AT" > "$RUNNER_TEMP/trivy-single.json"
+          trivy_code=$?
+
+          node "$core" verify \
+            --receipt "$RUNNER_TEMP/osv-out/receipt.json" \
+            --artifact "$artifact" \
+            --evidence "$RUNNER_TEMP/osv-out/evidence.json" \
+            --policy permissive \
+            --format json \
+            --now "$EVALUATED_AT" > "$RUNNER_TEMP/osv-single.json"
+          osv_code=$?
+
+          node "$core" verify-set \
+            --set "$RUNNER_TEMP/receipt-set.json" \
+            --artifact "$artifact" \
+            --policy permissive \
+            --format json \
+            --now "$EVALUATED_AT" > "$RUNNER_TEMP/composition.json"
+          composition_code=$?
+          set -e
+
+          test "$trivy_code" -ne 3
+          test "$osv_code" -ne 3
+          test "$composition_code" -ne 3
+
+          python - \
+            "$artifact" \
+            "$RUNNER_TEMP/trivy-out" \
+            "$RUNNER_TEMP/osv-out" \
+            "$RUNNER_TEMP/trivy-single.json" \
+            "$RUNNER_TEMP/osv-single.json" \
+            "$RUNNER_TEMP/receipt-set.json" \
+            "$RUNNER_TEMP/composition.json" \
+            "$RUNNER_TEMP/runtime-evidence-manifest.json" \
+            "$trivy_code" "$osv_code" "$composition_code" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          (
+              artifact_path,
+              trivy_out,
+              osv_out,
+              trivy_single_path,
+              osv_single_path,
+              set_path,
+              composition_path,
+              manifest_path,
+              trivy_code,
+              osv_code,
+              composition_code,
+          ) = sys.argv[1:]
+
+          artifact = Path(artifact_path).resolve()
+          trivy_out = Path(trivy_out)
+          osv_out = Path(osv_out)
+
+          def file_sha(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          def load(path):
+              with open(path, encoding="utf-8") as handle:
+                  return json.load(handle)
+
+          artifact_digest = "sha256:" + file_sha(artifact)
+          trivy_receipt = load(trivy_out / "receipt.json")
+          trivy_evidence = load(trivy_out / "evidence.json")
+          osv_receipt = load(osv_out / "receipt.json")
+          osv_evidence = load(osv_out / "evidence.json")
+          trivy_single = load(trivy_single_path)
+          osv_single = load(osv_single_path)
+          receipt_set = load(set_path)
+          composition = load(composition_path)
+
+          assert receipt_set["schema_version"] == "project-defined-receipt-set-v1"
+          assert [entry["id"] for entry in receipt_set["receipts"]] == ["trivy", "osv"]
+
+          for receipt, evidence, scanner, version in (
+              (trivy_receipt, trivy_evidence, "trivy", os.environ["TRIVY_VERSION"]),
+              (osv_receipt, osv_evidence, "osv-scanner", os.environ["OSV_VERSION"]),
+          ):
+              assert receipt["scanner"] == scanner
+              assert receipt["scanner_version"] == version
+              assert Path(receipt["scanned_artifact_ref"]).resolve() == artifact
+              assert receipt["scanned_artifact_digest"] == artifact_digest
+              assert Path(evidence["artifact"]["ref"]).resolve() == artifact
+              assert evidence["artifact"]["sha256"] == artifact_digest.removeprefix("sha256:")
+
+          trivy_evidence_digest = "sha256:" + file_sha(trivy_out / "evidence.json")
+          osv_evidence_digest = "sha256:" + file_sha(osv_out / "evidence.json")
+          assert trivy_receipt["evidence_digest"] == trivy_evidence_digest
+          assert osv_receipt["evidence_digest"] == osv_evidence_digest
+
+          assert trivy_single["profile"] == "registry-pr-1404@20747d3253ba8638161dd95f1cec70df02993c22"
+          assert osv_single["profile"] == trivy_single["profile"]
+          assert composition["profile"] == trivy_single["profile"]
+          assert composition["mode"] == "receipt-set"
+          assert composition["policy"] == "permissive"
+          assert composition["receiptCount"] == 2
+          assert composition["artifactDigest"] == artifact_digest
+          assert composition["evaluatedAt"] == trivy_single["evaluatedAt"] == osv_single["evaluatedAt"]
+
+          by_id = {entry["id"]: entry for entry in composition["receipts"]}
+          assert set(by_id) == {"trivy", "osv"}
+          assert by_id["trivy"]["scanner"] == "trivy"
+          assert by_id["osv"]["scanner"] == "osv-scanner"
+          assert by_id["trivy"]["decision"] == trivy_single["decision"]
+          assert by_id["osv"]["decision"] == osv_single["decision"]
+          assert by_id["trivy"]["receiptVerdict"] == trivy_single["receiptVerdict"] == trivy_receipt["verdict"]
+          assert by_id["osv"]["receiptVerdict"] == osv_single["receiptVerdict"] == osv_receipt["verdict"]
+          assert isinstance(by_id["trivy"]["checks"], list) and by_id["trivy"]["checks"]
+          assert isinstance(by_id["osv"]["checks"], list) and by_id["osv"]["checks"]
+
+          rank = {"pass": 0, "warn": 1, "inconclusive": 2, "fail": 3}
+          independent_expected = max(
+              (trivy_single["decision"], osv_single["decision"]),
+              key=rank.__getitem__,
+          )
+          assert composition["decision"] == independent_expected
+
+          exit_for = {"pass": 0, "warn": 0, "fail": 1, "inconclusive": 2}
+          assert int(trivy_code) == exit_for[trivy_single["decision"]]
+          assert int(osv_code) == exit_for[osv_single["decision"]]
+          assert int(composition_code) == exit_for[composition["decision"]]
+
+          osv_raw = load(osv_out / "osv.raw.json")
+          osv_sources = [row.get("source", {}) for row in osv_raw.get("results", [])]
+          assert osv_sources
+          assert all(Path(source["path"]).resolve() == artifact for source in osv_sources)
+          observed_osv_source_types = {source.get("type") for source in osv_sources}
+          assert observed_osv_source_types <= {"lockfile", "unknown"}
+          assert "lockfile" in observed_osv_source_types
+          assert osv_evidence["scanner_database"]["snapshot"] == "unavailable"
+
+          manifest = {
+              "schema_version": "dogfood-multi-receipt-runtime-evidence-v1",
+              "dogfood_commit": os.environ["GITHUB_SHA"],
+              "producer_reviewed_commit": os.environ["PRODUCER_REVIEWED_SHA"],
+              "producer_merge_commit": os.environ["PRODUCER_MERGE_SHA"],
+              "core_reviewed_commit": os.environ["CORE_REVIEWED_SHA"],
+              "core_merge_commit": os.environ["CORE_MERGE_SHA"],
+              "profile": composition["profile"],
+              "policy": composition["policy"],
+              "evaluated_at": composition["evaluatedAt"],
+              "artifact_digest": artifact_digest,
+              "trivy": {
+                  "version": os.environ["TRIVY_VERSION"],
+                  "archive_sha256": "sha256:" + os.environ["TRIVY_ARCHIVE_SHA256"],
+                  "executable_sha256": "sha256:" + os.environ["TRIVY_EXECUTABLE_SHA256"],
+                  "receipt_digest": "sha256:" + file_sha(trivy_out / "receipt.json"),
+                  "evidence_digest": trivy_evidence_digest,
+                  "raw_report_digest": "sha256:" + file_sha(trivy_out / "trivy.raw.json"),
+                  "receipt_verdict": trivy_receipt["verdict"],
+                  "single_decision": trivy_single["decision"],
+                  "single_exit_code": int(trivy_code),
+              },
+              "osv": {
+                  "version": os.environ["OSV_VERSION"],
+                  "executable_sha256": "sha256:" + os.environ["OSV_EXECUTABLE_SHA256"],
+                  "receipt_digest": "sha256:" + file_sha(osv_out / "receipt.json"),
+                  "evidence_digest": osv_evidence_digest,
+                  "raw_report_digest": "sha256:" + file_sha(osv_out / "osv.raw.json"),
+                  "receipt_verdict": osv_receipt["verdict"],
+                  "single_decision": osv_single["decision"],
+                  "single_exit_code": int(osv_code),
+                  "source_types": sorted(observed_osv_source_types),
+                  "scanner_database": osv_evidence["scanner_database"],
+              },
+              "receipt_set_digest": "sha256:" + file_sha(set_path),
+              "composition_result_digest": "sha256:" + file_sha(composition_path),
+              "aggregate_decision": composition["decision"],
+              "composition_exit_code": int(composition_code),
+          }
+          with open(manifest_path, "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+
+          aggregate_decision="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["decision"])' "$RUNNER_TEMP/composition.json")"
+          artifact_digest="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifactDigest"])' "$RUNNER_TEMP/composition.json")"
+          trivy_decision="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["decision"])' "$RUNNER_TEMP/trivy-single.json")"
+          osv_decision="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["decision"])' "$RUNNER_TEMP/osv-single.json")"
+          {
+            echo "aggregate_decision=$aggregate_decision"
+            echo "artifact_digest=$artifact_digest"
+            echo "trivy_decision=$trivy_decision"
+            echo "osv_decision=$osv_decision"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Real multi-receipt composition evidence"
+            echo
+            echo "| Field | Runtime value |"
+            echo "| --- | --- |"
+            echo "| Producer reviewed commit | \`$PRODUCER_REVIEWED_SHA\` |"
+            echo "| Core reviewed commit | \`$CORE_REVIEWED_SHA\` |"
+            echo "| Core merge commit | \`$CORE_MERGE_SHA\` |"
+            echo "| Artifact digest | \`$artifact_digest\` |"
+            echo "| Trivy decision | \`$trivy_decision\` |"
+            echo "| OSV decision | \`$osv_decision\` |"
+            echo "| Aggregate decision | \`$aggregate_decision\` |"
+            echo "| Composition exit | \`$composition_code\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload multi-receipt runtime evidence bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: real-multi-receipt-runtime-evidence-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/runtime-evidence-manifest.json
+            ${{ runner.temp }}/receipt-set.json
+            ${{ runner.temp }}/composition.json
+            ${{ runner.temp }}/trivy-single.json
+            ${{ runner.temp }}/osv-single.json
+            ${{ runner.temp }}/trivy-out/receipt.json
+            ${{ runner.temp }}/trivy-out/evidence.json
+            ${{ runner.temp }}/trivy-out/trivy.raw.json
+            ${{ runner.temp }}/trivy-out/trivy.stderr.log
+            ${{ runner.temp }}/osv-out/receipt.json
+            ${{ runner.temp }}/osv-out/evidence.json
+            ${{ runner.temp }}/osv-out/osv.raw.json
+            ${{ runner.temp }}/osv-out/osv.stderr.log
