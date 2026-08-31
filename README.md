@@ -22,7 +22,7 @@ The workflow uses `continue-on-error: true` for the Action step because `FAIL` a
 
 The workflow runs on pushes and manual dispatch:
 
-- `.github/workflows/mcp-evidence-gate.yml` calls the reviewed Action head `78e10c3266b52c2d2b15f43568398c27824adf41` by full immutable commit SHA.
+- `.github/workflows/mcp-evidence-gate.yml` calls the reviewed Action head `534afe675e27986e496cd68fb0c678525de2d124` by full immutable commit SHA.
 - `dist/example-artifact.bin` is marked as binary in `.gitattributes` so Windows line-ending conversion cannot change its digest.
 - Receipts live under `evidence/` and are intentionally small, deterministic fixtures.
 
