@@ -56,7 +56,7 @@ jobs:
             policy: permissive
             expected_decision: fail
             expected_outcome: failure
-            expected_verdict: unknown
+            expected_verdict: clean
 
     steps:
       - uses: actions/checkout@v4
