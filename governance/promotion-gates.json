@@ -11,13 +11,23 @@
       "producer_sha": "c831705f6aed062127ca4a72ba82c738831e49d4",
       "gate_sha": "d404b38f0ac0303438b561fe7358b0eec487c962",
       "trivy_version": "0.74.0"
+    },
+    "real_osv_consumer": {
+      "workflow": ".github/workflows/real-osv-producer.yml",
+      "producer_sha": "3a65d011e21efab79d758ec9b82b788ece5cfe6a",
+      "producer_merge_sha": "5fa319ece84dc699ca251e9199c54b14ad838207",
+      "gate_sha": "f736023aa23c48e9f667325f84282c8546c4aa57",
+      "osv_version": "2.5.1",
+      "osv_executable_sha256": "f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be",
+      "database_snapshot": "unavailable"
     }
   },
   "promotion_gate": {
     "job_name": "promotion-gate",
     "must_require": [
       "deterministic_matrix",
-      "real_trivy_consumer"
+      "real_trivy_consumer",
+      "real_osv_consumer"
     ]
   },
   "legacy_required_context_bridge": {
@@ -40,6 +50,28 @@
       "evidence.json",
       "trivy.raw.json",
       "trivy.stderr.log"
-    ]
+    ],
+    "bundles": {
+      "real_trivy": {
+        "artifact_name_prefix": "real-trivy-runtime-evidence-",
+        "files": [
+          "runtime-evidence-manifest.json",
+          "receipt.json",
+          "evidence.json",
+          "trivy.raw.json",
+          "trivy.stderr.log"
+        ]
+      },
+      "real_osv": {
+        "artifact_name_prefix": "real-osv-runtime-evidence-",
+        "files": [
+          "runtime-evidence-manifest.json",
+          "receipt.json",
+          "evidence.json",
+          "osv.raw.json",
+          "osv.stderr.log"
+        ]
+      }
+    }
   }
 }
