@@ -17,24 +17,72 @@ jobs:
         include:
           - name: matching-clean
             receipt: evidence/clean/receipt.json
+            policy: permissive
             expected_decision: pass
+            expected_verdict: clean
             expected_outcome: success
+          - name: warnings-permissive
+            receipt: evidence/warnings/permissive.json
+            policy: permissive
+            expected_decision: warn
+            expected_verdict: warnings
+            expected_outcome: success
+          - name: warnings-strict
+            receipt: evidence/warnings/strict.json
+            policy: strict-release-example
+            expected_decision: fail
+            expected_verdict: warnings
+            expected_outcome: failure
           - name: digest-mismatch
             receipt: evidence/inconclusive/receipt.json
+            policy: permissive
             expected_decision: inconclusive
+            expected_verdict: clean
             expected_outcome: failure
           - name: stale
             receipt: evidence/inconclusive/stale.json
+            policy: permissive
             expected_decision: inconclusive
+            expected_verdict: clean
             expected_outcome: failure
           - name: findings
             receipt: evidence/fail/findings.json
+            policy: permissive
             expected_decision: fail
+            expected_verdict: findings
             expected_outcome: failure
           - name: malformed-receipt
             receipt: evidence/fail/malformed.json
+            policy: permissive
             expected_decision: fail
             expected_outcome: failure
+            expected_verdict: clean
+          - name: explicit-evidence-match-permissive
+            receipt: evidence/clean/evidence-match-receipt.json
+            evidence: evidence/clean/evidence-report.json
+            policy: permissive
+            expected_decision: pass
+            expected_verdict: clean
+            expected_outcome: success
+          - name: explicit-evidence-mismatch-permissive
+            receipt: evidence/inconclusive/evidence-mismatch-receipt.json
+            evidence: evidence/clean/evidence-report.json
+            policy: permissive
+            expected_decision: inconclusive
+            expected_verdict: clean
+            expected_outcome: failure
+          - name: malformed-optional-evidence-digest
+            receipt: evidence/fail/malformed-optional-evidence-digest.json
+            policy: permissive
+            expected_decision: fail
+            expected_verdict: clean
+            expected_outcome: failure
+          - name: unrequested-unsupported-evidence-digest
+            receipt: evidence/clean/unrequested-unsupported-evidence-digest.json
+            policy: permissive
+            expected_decision: pass
+            expected_verdict: clean
+            expected_outcome: success
 
     steps:
       - uses: actions/checkout@v4
@@ -42,11 +90,12 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@b8cacb5eadca53c8b9a1e8d5c8ac956fd579238d
+        uses: yandexuanxuan/mcp-evidence-gate@9bed76881fa040c78618c23d911664e919ad90cf
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
-          policy: permissive
+          policy: ${{ matrix.policy }}
+          evidence: ${{ matrix.evidence }}
 
       - name: Assert expected decision
         if: always()
@@ -56,4 +105,6 @@ jobs:
           echo "profile=${{ steps.evidence.outputs.profile }}"
           echo "outcome=${{ steps.evidence.outcome }}"
           test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected_decision }}"
+          test "${{ steps.evidence.outputs.receipt-verdict }}" = "${{ matrix.expected_verdict }}"
+          test "${{ steps.evidence.outputs.profile }}" = "registry-pr-1404@20747d3253ba8638161dd95f1cec70df02993c22"
           test "${{ steps.evidence.outcome }}" = "${{ matrix.expected_outcome }}"
