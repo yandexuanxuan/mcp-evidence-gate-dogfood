@@ -1,0 +1,2 @@
+# Exact single-file dependency artifact used by the real Trivy fs smoke.
+requests==2.31.0

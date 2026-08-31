@@ -1,0 +1,135 @@
+name: Real Trivy Producer Consumer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/real-trivy-producer.yml
+      - evidence/real-trivy/requirements.txt
+
+permissions:
+  contents: read
+
+jobs:
+  real-trivy-producer-consumer:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCER_SHA: c831705f6aed062127ca4a72ba82c738831e49d4
+      GATE_SHA: d404b38f0ac0303438b561fe7358b0eec487c962
+      TRIVY_VERSION: 0.74.0
+      TRIVY_ARCHIVE_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+      TRIVY_EXECUTABLE_SHA256: d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download and verify pinned Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/trivy.tar.gz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_ARCHIVE_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP"
+          echo "${TRIVY_EXECUTABLE_SHA256}  $RUNNER_TEMP/trivy" | sha256sum --check --strict
+          test "$("$RUNNER_TEMP/trivy" --version | sed -n 's/^Version: //p')" = "$TRIVY_VERSION"
+
+      - name: Check out immutable producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/yandexuanxuan/mcp-evidence-producer-trivy.git "$RUNNER_TEMP/producer"
+          git -C "$RUNNER_TEMP/producer" checkout --detach "$PRODUCER_SHA"
+          test "$(git -C "$RUNNER_TEMP/producer" rev-parse HEAD)" = "$PRODUCER_SHA"
+
+      - name: Run real producer against consumer-owned artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m src.producer \
+            --trivy "$RUNNER_TEMP/trivy" \
+            --artifact "$GITHUB_WORKSPACE/evidence/real-trivy/requirements.txt" \
+            --out "$RUNNER_TEMP/producer-out"
+        working-directory: ${{ runner.temp }}/producer
+
+      - name: Record runtime evidence facts
+        id: facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact='evidence/real-trivy/requirements.txt'
+          out="$RUNNER_TEMP/producer-out"
+          artifact_digest="sha256:$(sha256sum "$artifact" | cut -d ' ' -f 1)"
+          evidence_digest="sha256:$(sha256sum "$out/evidence.json" | cut -d ' ' -f 1)"
+          receipt_verdict="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["verdict"])' "$out/receipt.json")"
+          python - "$artifact_digest" "$evidence_digest" "$receipt_verdict" "$out" <<'PY'
+          import json
+          import sys
+          artifact_digest, evidence_digest, receipt_verdict, output_dir = sys.argv[1:]
+          receipt = json.load(open(f"{output_dir}/receipt.json", encoding="utf-8"))
+          evidence = json.load(open(f"{output_dir}/evidence.json", encoding="utf-8"))
+          assert receipt["scanned_artifact_digest"] == artifact_digest
+          assert receipt["evidence_digest"] == evidence_digest
+          assert receipt["verdict"] == receipt_verdict
+          assert receipt_verdict in {"clean", "warnings", "findings", "inconclusive"}
+          assert evidence["artifact"]["sha256"] == artifact_digest.removeprefix("sha256:")
+          assert evidence["scanner"]["name"] == "trivy"
+          assert evidence["scanner"]["version"] == "0.74.0"
+          PY
+          {
+            echo "artifact_digest=$artifact_digest"
+            echo "evidence_digest=$evidence_digest"
+            echo "receipt_verdict=$receipt_verdict"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify real evidence with immutable gate
+        id: gate
+        continue-on-error: true
+        uses: yandexuanxuan/mcp-evidence-gate@d404b38f0ac0303438b561fe7358b0eec487c962
+        with:
+          receipt: ${{ runner.temp }}/producer-out/receipt.json
+          artifact: evidence/real-trivy/requirements.txt
+          evidence: ${{ runner.temp }}/producer-out/evidence.json
+          policy: permissive
+
+      - name: Assert dynamic gate decision and Action outcome
+        if: always()
+        env:
+          ACTUAL_DECISION: ${{ steps.gate.outputs.decision }}
+          ACTUAL_VERDICT: ${{ steps.gate.outputs.receipt-verdict }}
+          ACTUAL_OUTCOME: ${{ steps.gate.outcome }}
+          PRODUCER_VERDICT: ${{ steps.facts.outputs.receipt_verdict }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PRODUCER_VERDICT" in
+            clean) expected_decision=pass ;;
+            warnings) expected_decision=warn ;;
+            findings) expected_decision=fail ;;
+            inconclusive) expected_decision=inconclusive ;;
+            *) echo "unsupported producer verdict: $PRODUCER_VERDICT" >&2; exit 1 ;;
+          esac
+          case "$expected_decision" in
+            pass|warn) expected_outcome=success ;;
+            fail|inconclusive) expected_outcome=failure ;;
+          esac
+          test "$ACTUAL_VERDICT" = "$PRODUCER_VERDICT"
+          test "$ACTUAL_DECISION" = "$expected_decision"
+          test "$ACTUAL_OUTCOME" = "$expected_outcome"
+          {
+            echo "## Real Trivy producer-consumer evidence"
+            echo
+            echo "| Field | Runtime value |"
+            echo "| --- | --- |"
+            echo "| Producer commit | \`$PRODUCER_SHA\` |"
+            echo "| Gate commit | \`$GATE_SHA\` |"
+            echo "| Trivy | \`$TRIVY_VERSION\` |"
+            echo "| Artifact digest | \`${{ steps.facts.outputs.artifact_digest }}\` |"
+            echo "| Evidence digest | \`${{ steps.facts.outputs.evidence_digest }}\` |"
+            echo "| Receipt verdict | \`$PRODUCER_VERDICT\` |"
+            echo "| Gate decision | \`$ACTUAL_DECISION\` |"
+            echo "| Gate step outcome | \`$ACTUAL_OUTCOME\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
