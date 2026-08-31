@@ -17,24 +17,46 @@ jobs:
         include:
           - name: matching-clean
             receipt: evidence/clean/receipt.json
+            policy: permissive
             expected_decision: pass
+            expected_verdict: clean
             expected_outcome: success
+          - name: warnings-permissive
+            receipt: evidence/warnings/permissive.json
+            policy: permissive
+            expected_decision: warn
+            expected_verdict: warnings
+            expected_outcome: success
+          - name: warnings-strict
+            receipt: evidence/warnings/strict.json
+            policy: strict-release-example
+            expected_decision: fail
+            expected_verdict: warnings
+            expected_outcome: failure
           - name: digest-mismatch
             receipt: evidence/inconclusive/receipt.json
+            policy: permissive
             expected_decision: inconclusive
+            expected_verdict: clean
             expected_outcome: failure
           - name: stale
             receipt: evidence/inconclusive/stale.json
+            policy: permissive
             expected_decision: inconclusive
+            expected_verdict: clean
             expected_outcome: failure
           - name: findings
             receipt: evidence/fail/findings.json
+            policy: permissive
             expected_decision: fail
+            expected_verdict: findings
             expected_outcome: failure
           - name: malformed-receipt
             receipt: evidence/fail/malformed.json
+            policy: permissive
             expected_decision: fail
             expected_outcome: failure
+            expected_verdict: unknown
 
     steps:
       - uses: actions/checkout@v4
@@ -42,11 +64,11 @@ jobs:
       - name: Verify ${{ matrix.name }}
         id: evidence
         continue-on-error: true
-        uses: yandexuanxuan/mcp-evidence-gate@b8cacb5eadca53c8b9a1e8d5c8ac956fd579238d
+        uses: yandexuanxuan/mcp-evidence-gate@f8a0b517a15896848530365f77d21482e34fdbca
         with:
           receipt: ${{ matrix.receipt }}
           artifact: dist/example-artifact.bin
-          policy: permissive
+          policy: ${{ matrix.policy }}
 
       - name: Assert expected decision
         if: always()
@@ -56,4 +78,6 @@ jobs:
           echo "profile=${{ steps.evidence.outputs.profile }}"
           echo "outcome=${{ steps.evidence.outcome }}"
           test "${{ steps.evidence.outputs.decision }}" = "${{ matrix.expected_decision }}"
+          test "${{ steps.evidence.outputs.receipt-verdict }}" = "${{ matrix.expected_verdict }}"
+          test -n "${{ steps.evidence.outputs.profile }}"
           test "${{ steps.evidence.outcome }}" = "${{ matrix.expected_outcome }}"

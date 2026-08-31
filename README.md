@@ -9,6 +9,8 @@ This repository is an executable specification for downstream consumers. It keep
 | Case | Expected decision | Meaning |
 | --- | --- | --- |
 | matching clean receipt | `PASS` | The receipt binds to the artifact and satisfies the permissive policy. |
+| warnings + permissive | `WARN` | Warning is preserved and explicitly allowed by policy; Action succeeds. |
+| warnings + strict-release-example | `FAIL` | Warning is preserved but explicitly blocked by policy; Action fails. |
 | digest mismatch | `INCONCLUSIVE` | The evidence cannot support this artifact; this is not a server-safety claim. |
 | stale receipt | `INCONCLUSIVE` | The evidence freshness window has expired. |
 | findings receipt | `FAIL` | The scanner reported findings. |
@@ -20,8 +22,8 @@ The workflow uses `continue-on-error: true` for the Action step because `FAIL` a
 
 The workflow runs on pushes and manual dispatch:
 
-- `.github/workflows/mcp-evidence-gate.yml` calls `yandexuanxuan/mcp-evidence-gate@b8cacb5eadca53c8b9a1e8d5c8ac956fd579238d` (the `v0.1.0-alpha.2` release commit).
+- `.github/workflows/mcp-evidence-gate.yml` calls the Action by a full immutable commit SHA.
 - `dist/example-artifact.bin` is marked as binary in `.gitattributes` so Windows line-ending conversion cannot change its digest.
 - Receipts live under `evidence/` and are intentionally small, deterministic fixtures.
 
-This repository does not run a scanner and does not claim that the example server is safe. It verifies the downstream release-admission contract: scanner verdict, artifact binding, freshness, and policy decision remain distinct.
+This repository does not run a scanner and does not claim that the example server is safe. It verifies the downstream release-admission contract: scanner verdict, artifact binding, freshness, policy decision, and CI step outcome remain distinct. Warning blocking is an explicit policy choice.
