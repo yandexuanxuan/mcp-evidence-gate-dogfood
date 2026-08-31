@@ -1,0 +1,205 @@
+name: Real OSV Producer Consumer
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/real-osv-producer.yml
+      - evidence/real-trivy/requirements.txt
+
+permissions:
+  contents: read
+
+jobs:
+  real-osv-producer-consumer:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCER_SHA: 3a65d011e21efab79d758ec9b82b788ece5cfe6a
+      GATE_SHA: f736023aa23c48e9f667325f84282c8546c4aa57
+      OSV_VERSION: 2.5.1
+      OSV_EXECUTABLE_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download and verify pinned OSV-Scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_EXECUTABLE_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          actual_version="$("$RUNNER_TEMP/osv-scanner" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          test "$actual_version" = "$OSV_VERSION"
+
+      - name: Check out immutable reviewed producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/yandexuanxuan/mcp-evidence-producer-trivy.git "$RUNNER_TEMP/producer"
+          git -C "$RUNNER_TEMP/producer" checkout --detach "$PRODUCER_SHA"
+          test "$(git -C "$RUNNER_TEMP/producer" rev-parse HEAD)" = "$PRODUCER_SHA"
+
+      - name: Run real OSV producer against consumer-owned artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m src.osv_producer \
+            --osv "$RUNNER_TEMP/osv-scanner" \
+            --artifact "$GITHUB_WORKSPACE/evidence/real-trivy/requirements.txt" \
+            --out "$RUNNER_TEMP/producer-out"
+        working-directory: ${{ runner.temp }}/producer
+
+      - name: Record OSV runtime evidence facts
+        id: facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact='evidence/real-trivy/requirements.txt'
+          out="$RUNNER_TEMP/producer-out"
+          artifact_digest="sha256:$(sha256sum "$artifact" | cut -d ' ' -f 1)"
+          evidence_digest="sha256:$(sha256sum "$out/evidence.json" | cut -d ' ' -f 1)"
+          receipt_digest="sha256:$(sha256sum "$out/receipt.json" | cut -d ' ' -f 1)"
+          raw_report_digest="sha256:$(sha256sum "$out/osv.raw.json" | cut -d ' ' -f 1)"
+          receipt_verdict="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["verdict"])' "$out/receipt.json")"
+          scanner_exit="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["invocation"]["exit_code"])' "$out/evidence.json")"
+          source_types="$(python -c 'import json,sys; print(",".join(sorted({r.get("source",{}).get("type","missing") for r in json.load(open(sys.argv[1], encoding="utf-8")).get("results",[])})))' "$out/osv.raw.json")"
+          python - "$artifact_digest" "$evidence_digest" "$receipt_digest" "$raw_report_digest" "$receipt_verdict" "$scanner_exit" "$source_types" "$out" "$RUNNER_TEMP/runtime-evidence-manifest.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          artifact_digest, evidence_digest, receipt_digest, raw_report_digest, receipt_verdict, scanner_exit, source_types, output_dir, manifest_path = sys.argv[1:]
+          receipt = json.load(open(f"{output_dir}/receipt.json", encoding="utf-8"))
+          evidence = json.load(open(f"{output_dir}/evidence.json", encoding="utf-8"))
+          raw = json.load(open(f"{output_dir}/osv.raw.json", encoding="utf-8"))
+
+          assert receipt["scanner"] == "osv-scanner"
+          assert receipt["scanner_version"] == os.environ["OSV_VERSION"]
+          assert receipt["scanned_artifact_digest"] == artifact_digest
+          assert receipt["evidence_digest"] == evidence_digest
+          assert receipt["verdict"] == receipt_verdict
+          assert receipt_verdict in {"clean", "findings"}
+          assert evidence["artifact"]["sha256"] == artifact_digest.removeprefix("sha256:")
+          assert evidence["raw_report"]["sha256"] == raw_report_digest.removeprefix("sha256:")
+          assert evidence["scanner"]["name"] == "osv-scanner"
+          assert evidence["scanner"]["version"] == os.environ["OSV_VERSION"]
+          assert evidence["scanner"]["binary_sha256"] == os.environ["OSV_EXECUTABLE_SHA256"]
+          assert evidence["scanner_database"]["source"] == "https://osv.dev"
+          assert evidence["scanner_database"]["mode"] == "remote-query"
+          assert evidence["scanner_database"]["snapshot"] == "unavailable"
+          assert int(scanner_exit) in {0, 1}
+          assert isinstance(raw.get("results"), list) and raw["results"]
+          assert all(r.get("source", {}).get("path") for r in raw["results"])
+
+          manifest = {
+              "schema_version": "dogfood-runtime-evidence-v1",
+              "dogfood_commit": os.environ["GITHUB_SHA"],
+              "producer_commit": os.environ["PRODUCER_SHA"],
+              "gate_commit": os.environ["GATE_SHA"],
+              "osv_version": os.environ["OSV_VERSION"],
+              "osv_executable_sha256": "sha256:" + os.environ["OSV_EXECUTABLE_SHA256"],
+              "artifact_digest": artifact_digest,
+              "raw_report_digest": raw_report_digest,
+              "evidence_digest": evidence_digest,
+              "receipt_digest": receipt_digest,
+              "receipt_verdict": receipt_verdict,
+              "scanner_exit_code": int(scanner_exit),
+              "source_types": source_types.split(",") if source_types else [],
+              "scanner_database": evidence["scanner_database"],
+          }
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          {
+            echo "artifact_digest=$artifact_digest"
+            echo "raw_report_digest=$raw_report_digest"
+            echo "evidence_digest=$evidence_digest"
+            echo "receipt_digest=$receipt_digest"
+            echo "receipt_verdict=$receipt_verdict"
+            echo "scanner_exit=$scanner_exit"
+            echo "source_types=$source_types"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify real OSV evidence with immutable gate
+        id: gate
+        continue-on-error: true
+        uses: yandexuanxuan/mcp-evidence-gate@f736023aa23c48e9f667325f84282c8546c4aa57
+        with:
+          receipt: ${{ runner.temp }}/producer-out/receipt.json
+          artifact: evidence/real-trivy/requirements.txt
+          evidence: ${{ runner.temp }}/producer-out/evidence.json
+          policy: permissive
+
+      - name: Assert dynamic OSV gate decision and Action outcome
+        if: always()
+        env:
+          ACTUAL_DECISION: ${{ steps.gate.outputs.decision }}
+          ACTUAL_VERDICT: ${{ steps.gate.outputs.receipt-verdict }}
+          ACTUAL_OUTCOME: ${{ steps.gate.outcome }}
+          PRODUCER_VERDICT: ${{ steps.facts.outputs.receipt_verdict }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PRODUCER_VERDICT" in
+            clean) expected_decision=pass ;;
+            findings) expected_decision=fail ;;
+            *) echo "unsupported producer verdict: $PRODUCER_VERDICT" >&2; exit 1 ;;
+          esac
+          case "$expected_decision" in
+            pass) expected_outcome=success ;;
+            fail) expected_outcome=failure ;;
+          esac
+          test "$ACTUAL_VERDICT" = "$PRODUCER_VERDICT"
+          test "$ACTUAL_DECISION" = "$expected_decision"
+          test "$ACTUAL_OUTCOME" = "$expected_outcome"
+          python - "$RUNNER_TEMP/runtime-evidence-manifest.json" "$ACTUAL_DECISION" "$ACTUAL_OUTCOME" <<'PY'
+          import json
+          import sys
+          path, decision, outcome = sys.argv[1:]
+          data = json.load(open(path, encoding="utf-8"))
+          data["gate_decision"] = decision
+          data["gate_step_outcome"] = outcome
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+          {
+            echo "## Real OSV producer-consumer evidence"
+            echo
+            echo "| Field | Runtime value |"
+            echo "| --- | --- |"
+            echo "| Producer reviewed commit | \`$PRODUCER_SHA\` |"
+            echo "| Gate commit | \`$GATE_SHA\` |"
+            echo "| OSV-Scanner | \`$OSV_VERSION\` |"
+            echo "| Artifact digest | \`${{ steps.facts.outputs.artifact_digest }}\` |"
+            echo "| Raw report digest | \`${{ steps.facts.outputs.raw_report_digest }}\` |"
+            echo "| Evidence digest | \`${{ steps.facts.outputs.evidence_digest }}\` |"
+            echo "| Receipt digest | \`${{ steps.facts.outputs.receipt_digest }}\` |"
+            echo "| Scanner exit | \`${{ steps.facts.outputs.scanner_exit }}\` |"
+            echo "| Source types | \`${{ steps.facts.outputs.source_types }}\` |"
+            echo "| DB snapshot | \`unavailable\` |"
+            echo "| Receipt verdict | \`$PRODUCER_VERDICT\` |"
+            echo "| Gate decision | \`$ACTUAL_DECISION\` |"
+            echo "| Gate step outcome | \`$ACTUAL_OUTCOME\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OSV runtime evidence bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: real-osv-runtime-evidence-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/runtime-evidence-manifest.json
+            ${{ runner.temp }}/producer-out/receipt.json
+            ${{ runner.temp }}/producer-out/evidence.json
+            ${{ runner.temp }}/producer-out/osv.raw.json
+            ${{ runner.temp }}/producer-out/osv.stderr.log
