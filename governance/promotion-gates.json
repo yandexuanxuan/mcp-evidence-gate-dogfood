@@ -20,6 +20,20 @@
       "osv_version": "2.5.1",
       "osv_executable_sha256": "f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be",
       "database_snapshot": "unavailable"
+    },
+    "real_multi_receipt_composition": {
+      "workflow": ".github/workflows/real-multi-receipt-composition.yml",
+      "receipt_set_schema": "project-defined-receipt-set-v1",
+      "producer_reviewed_sha": "3a65d011e21efab79d758ec9b82b788ece5cfe6a",
+      "producer_merge_sha": "5fa319ece84dc699ca251e9199c54b14ad838207",
+      "core_reviewed_sha": "b12a3615297556c6d4e86f741e223488a658da8a",
+      "core_merge_sha": "d5abcdc28d6e288da15ec69b16901ec604da5617",
+      "trivy_version": "0.74.0",
+      "trivy_executable_sha256": "d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791",
+      "osv_version": "2.5.1",
+      "osv_executable_sha256": "f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be",
+      "database_snapshot": "unavailable",
+      "shared_artifact": "evidence/real-trivy/requirements.txt"
     }
   },
   "promotion_gate": {
@@ -27,7 +41,8 @@
     "must_require": [
       "deterministic_matrix",
       "real_trivy_consumer",
-      "real_osv_consumer"
+      "real_osv_consumer",
+      "real_multi_receipt_composition"
     ]
   },
   "legacy_required_context_bridge": {
@@ -70,6 +85,24 @@
           "evidence.json",
           "osv.raw.json",
           "osv.stderr.log"
+        ]
+      },
+      "real_multi_receipt_composition": {
+        "artifact_name_prefix": "real-multi-receipt-runtime-evidence-",
+        "files": [
+          "runtime-evidence-manifest.json",
+          "receipt-set.json",
+          "composition.json",
+          "trivy-single.json",
+          "osv-single.json",
+          "trivy-out/receipt.json",
+          "trivy-out/evidence.json",
+          "trivy-out/trivy.raw.json",
+          "trivy-out/trivy.stderr.log",
+          "osv-out/receipt.json",
+          "osv-out/evidence.json",
+          "osv-out/osv.raw.json",
+          "osv-out/osv.stderr.log"
         ]
       }
     }

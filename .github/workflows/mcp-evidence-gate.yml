@@ -117,6 +117,10 @@ jobs:
     name: real-osv-promotion
     uses: ./.github/workflows/real-osv-producer.yml
 
+  real-multi-receipt-promotion:
+    name: real-multi-receipt-promotion
+    uses: ./.github/workflows/real-multi-receipt-composition.yml
+
   promotion-gate:
     name: promotion-gate
     if: always()
@@ -124,6 +128,7 @@ jobs:
       - verify-evidence
       - real-trivy-promotion
       - real-osv-promotion
+      - real-multi-receipt-promotion
     runs-on: ubuntu-latest
     steps:
       - name: Require all declared acceptance evidence
@@ -131,14 +136,17 @@ jobs:
           MATRIX_RESULT: ${{ needs.verify-evidence.result }}
           REAL_TRIVY_RESULT: ${{ needs.real-trivy-promotion.result }}
           REAL_OSV_RESULT: ${{ needs.real-osv-promotion.result }}
+          REAL_COMPOSITION_RESULT: ${{ needs.real-multi-receipt-promotion.result }}
         run: |
           set -euo pipefail
           echo "deterministic_matrix=$MATRIX_RESULT"
           echo "real_trivy_consumer=$REAL_TRIVY_RESULT"
           echo "real_osv_consumer=$REAL_OSV_RESULT"
+          echo "real_multi_receipt_composition=$REAL_COMPOSITION_RESULT"
           test "$MATRIX_RESULT" = success
           test "$REAL_TRIVY_RESULT" = success
           test "$REAL_OSV_RESULT" = success
+          test "$REAL_COMPOSITION_RESULT" = success
 
   legacy-required-context-anchor:
     if: always()
