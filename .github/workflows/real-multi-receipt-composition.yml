@@ -24,7 +24,6 @@ jobs:
       TRIVY_EXECUTABLE_SHA256: d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791
       OSV_VERSION: 2.5.1
       OSV_EXECUTABLE_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
-      EVALUATED_AT: 2026-09-01T00:00:00Z
 
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +99,7 @@ jobs:
           echo "runtime_started=true" >> "$GITHUB_OUTPUT"
           artifact="$GITHUB_WORKSPACE/evidence/real-trivy/requirements.txt"
           core="$RUNNER_TEMP/core/dist/cli.js"
+          evaluated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           cat > "$RUNNER_TEMP/receipt-set.json" <<'JSON'
           {
@@ -116,20 +116,20 @@ jobs:
             --receipt "$RUNNER_TEMP/trivy-out/receipt.json" \
             --artifact "$artifact" \
             --evidence "$RUNNER_TEMP/trivy-out/evidence.json" \
-            --policy permissive --format json --now "$EVALUATED_AT" \
+            --policy permissive --format json --now "$evaluated_at" \
             > "$RUNNER_TEMP/trivy-single.json"
           trivy_code=$?
           node "$core" verify \
             --receipt "$RUNNER_TEMP/osv-out/receipt.json" \
             --artifact "$artifact" \
             --evidence "$RUNNER_TEMP/osv-out/evidence.json" \
-            --policy permissive --format json --now "$EVALUATED_AT" \
+            --policy permissive --format json --now "$evaluated_at" \
             > "$RUNNER_TEMP/osv-single.json"
           osv_code=$?
           node "$core" verify-set \
             --set "$RUNNER_TEMP/receipt-set.json" \
             --artifact "$artifact" \
-            --policy permissive --format json --now "$EVALUATED_AT" \
+            --policy permissive --format json --now "$evaluated_at" \
             > "$RUNNER_TEMP/composition.json"
           composition_code=$?
           set -e
@@ -152,6 +152,7 @@ jobs:
           import json
           import os
           import sys
+          from datetime import datetime, timezone
           from pathlib import Path
 
           (artifact_path, trivy_out, osv_out, trivy_single_path, osv_single_path,
@@ -171,6 +172,9 @@ jobs:
           def load(path):
               with open(path, encoding="utf-8") as handle:
                   return json.load(handle)
+
+          def parse_time(value):
+              return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
           artifact_digest = digest(artifact)
           trivy_receipt = load(trivy_out / "receipt.json")
@@ -210,6 +214,11 @@ jobs:
           assert composition["receiptCount"] == 2
           assert composition["artifactDigest"] == artifact_digest
           assert composition["evaluatedAt"] == trivy_single["evaluatedAt"] == osv_single["evaluatedAt"]
+          evaluated_at = parse_time(composition["evaluatedAt"])
+          assert evaluated_at >= parse_time(trivy_receipt["scanned_at"])
+          assert evaluated_at >= parse_time(osv_receipt["scanned_at"])
+          assert all(check.get("reason") != "scan_timestamp_in_future" for check in trivy_single["checks"])
+          assert all(check.get("reason") != "scan_timestamp_in_future" for check in osv_single["checks"])
 
           by_id = {entry["id"]: entry for entry in composition["receipts"]}
           assert set(by_id) == {"trivy", "osv"}
