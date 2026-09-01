@@ -1,0 +1,222 @@
+name: Real OCI Exact Identity
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/real-oci-identity.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-oci-identity:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCER_REVIEWED_SHA: e8b857e027ec7e15caced4136cb19ff440c44a45
+      PRODUCER_MERGE_SHA: 4c4d9bd476396cd7e34e9d4182900ac00b03d17b
+      CORE_SHA: d5abcdc28d6e288da15ec69b16901ec604da5617
+      ROOT_REF: ghcr.io/containers/kubernetes-mcp-server@sha256:7cba55569933e79d8b877607a0413c62faa23f0b281a99144ebb07f853539c82
+      ROOT_DIGEST: sha256:7cba55569933e79d8b877607a0413c62faa23f0b281a99144ebb07f853539c82
+      PLATFORM_DIGEST: sha256:a60d068656fa8b57fb6f55565e439813aca7f44219e3239575c2e749d5f60bf7
+      TRIVY_VERSION: 0.74.0
+      TRIVY_ARCHIVE_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+      TRIVY_EXECUTABLE_SHA256: d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download and verify pinned Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_ARCHIVE_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP"
+          echo "${TRIVY_EXECUTABLE_SHA256}  $RUNNER_TEMP/trivy" | sha256sum --check --strict
+          test "$("$RUNNER_TEMP/trivy" --version | sed -n 's/^Version: //p')" = "$TRIVY_VERSION"
+
+      - name: Execute exact OCI producer and immutable Core consumer
+        id: runtime
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runtime_started=true" >> "$GITHUB_OUTPUT"
+
+          git clone https://github.com/yandexuanxuan/mcp-evidence-producer-trivy.git "$RUNNER_TEMP/producer"
+          git -C "$RUNNER_TEMP/producer" checkout --detach "$PRODUCER_REVIEWED_SHA"
+          test "$(git -C "$RUNNER_TEMP/producer" rev-parse HEAD)" = "$PRODUCER_REVIEWED_SHA"
+
+          (
+            cd "$RUNNER_TEMP/producer"
+            python -m src.oci_producer \
+              --trivy "$RUNNER_TEMP/trivy" \
+              --image "$ROOT_REF" \
+              --platform-os linux \
+              --platform-arch amd64 \
+              --out "$RUNNER_TEMP/oci-out"
+          )
+
+          git clone https://github.com/yandexuanxuan/mcp-evidence-gate.git "$RUNNER_TEMP/core"
+          git -C "$RUNNER_TEMP/core" checkout --detach "$CORE_SHA"
+          test "$(git -C "$RUNNER_TEMP/core" rev-parse HEAD)" = "$CORE_SHA"
+          pnpm --dir "$RUNNER_TEMP/core" install --frozen-lockfile
+          pnpm --dir "$RUNNER_TEMP/core" build
+
+          set +e
+          node "$RUNNER_TEMP/core/dist/cli.js" verify \
+            --receipt "$RUNNER_TEMP/oci-out/receipt.json" \
+            --artifact "$RUNNER_TEMP/oci-out/oci.manifest.json" \
+            --evidence "$RUNNER_TEMP/oci-out/evidence.json" \
+            --policy permissive \
+            --format json > "$RUNNER_TEMP/oci-gate.json"
+          gate_code=$?
+          set -e
+          test "$gate_code" -ne 2
+          test "$gate_code" -ne 3
+
+          python - \
+            "$RUNNER_TEMP/oci-out" \
+            "$RUNNER_TEMP/oci-gate.json" \
+            "$RUNNER_TEMP/runtime-evidence-manifest.json" \
+            "$gate_code" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          gate_path = Path(sys.argv[2])
+          manifest_path = Path(sys.argv[3])
+          gate_code = int(sys.argv[4])
+
+          def load(path):
+              return json.loads(Path(path).read_text(encoding="utf-8"))
+
+          def digest(path):
+              return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          identity = load(out / "oci-identity.json")
+          receipt = load(out / "receipt.json")
+          evidence = load(out / "evidence.json")
+          raw = load(out / "trivy.raw.json")
+          gate = load(gate_path)
+
+          root_digest = os.environ["ROOT_DIGEST"]
+          platform_digest = os.environ["PLATFORM_DIGEST"]
+          expected_ref = "ghcr.io/containers/kubernetes-mcp-server@" + platform_digest
+
+          assert identity["requested_ref"] == os.environ["ROOT_REF"]
+          assert identity["requested_reference_kind"] == "digest"
+          assert identity["root"]["digest"] == root_digest == digest(out / "oci.index.json")
+          assert root_digest != platform_digest
+
+          selected = identity["selected"]
+          assert selected["selection_source"] == "image-index"
+          assert selected["platform"] == {"os": "linux", "architecture": "amd64"}
+          assert selected["platform_verified"] is True
+          assert selected["platform_source"] == "index-descriptor"
+          assert selected["descriptor_digest"] == platform_digest
+          assert selected["manifest_digest"] == platform_digest == digest(out / "oci.manifest.json")
+          assert selected["exact_ref"] == expected_ref
+
+          assert receipt["scanned_artifact_ref"] == expected_ref
+          assert receipt["scanned_artifact_digest"] == platform_digest
+          assert receipt["scanner"] == "trivy"
+          assert receipt["scanner_version"] == os.environ["TRIVY_VERSION"]
+          assert receipt["verdict"] in {"clean", "findings"}
+          evidence_digest = digest(out / "evidence.json")
+          assert receipt["evidence_digest"] == evidence_digest
+
+          assert evidence["artifact"]["root_digest"] == root_digest
+          assert evidence["artifact"]["exact_ref"] == expected_ref
+          assert "sha256:" + evidence["artifact"]["sha256"] == platform_digest
+          assert evidence["artifact"]["identity_sha256"] == digest(out / "oci-identity.json").removeprefix("sha256:")
+          assert evidence["artifact"]["index_sha256"] == digest(out / "oci.index.json").removeprefix("sha256:")
+          assert evidence["raw_report"]["sha256"] == digest(out / "trivy.raw.json").removeprefix("sha256:")
+          assert evidence["invocation"]["target_exact_ref"] == expected_ref
+          assert evidence["invocation"]["argv"][-1] == expected_ref
+
+          assert raw["ArtifactName"] == expected_ref
+          assert expected_ref in raw.get("Metadata", {}).get("RepoDigests", [])
+
+          artifact_binding = next(check for check in gate["checks"] if check["id"] == "artifact_binding")
+          evidence_binding = next(check for check in gate["checks"] if check["id"] == "evidence_binding")
+          assert artifact_binding["status"] == "pass"
+          assert evidence_binding["status"] == "pass"
+          assert gate["receiptVerdict"] == receipt["verdict"]
+          exit_for = {"pass": 0, "warn": 0, "fail": 1, "inconclusive": 2}
+          assert gate_code == exit_for[gate["decision"]]
+          if receipt["verdict"] == "findings":
+              assert gate["decision"] == "fail"
+          else:
+              assert gate["decision"] in {"pass", "warn"}
+
+          findings = sum(len(row.get("Vulnerabilities") or []) for row in raw.get("Results", []))
+          retained = {
+              "schema_version": "dogfood-oci-exact-identity-runtime-evidence-v1",
+              "dogfood_commit": os.environ["GITHUB_SHA"],
+              "producer_reviewed_commit": os.environ["PRODUCER_REVIEWED_SHA"],
+              "producer_merge_commit": os.environ["PRODUCER_MERGE_SHA"],
+              "core_commit": os.environ["CORE_SHA"],
+              "trivy_version": os.environ["TRIVY_VERSION"],
+              "root_ref": os.environ["ROOT_REF"],
+              "root_digest": root_digest,
+              "platform": selected["platform"],
+              "platform_verified": selected["platform_verified"],
+              "platform_source": selected["platform_source"],
+              "platform_manifest_digest": platform_digest,
+              "exact_ref": expected_ref,
+              "identity_digest": digest(out / "oci-identity.json"),
+              "manifest_bytes_digest": digest(out / "oci.manifest.json"),
+              "index_bytes_digest": digest(out / "oci.index.json"),
+              "receipt_digest": digest(out / "receipt.json"),
+              "evidence_digest": evidence_digest,
+              "raw_report_digest": digest(out / "trivy.raw.json"),
+              "receipt_verdict": receipt["verdict"],
+              "gate_decision": gate["decision"],
+              "gate_exit_code": gate_code,
+              "finding_count": findings,
+          }
+          manifest_path.write_text(json.dumps(retained, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload OCI runtime evidence
+        if: always() && steps.runtime.outputs.runtime_started == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: real-oci-identity-runtime-evidence-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/runtime-evidence-manifest.json
+            ${{ runner.temp }}/oci-gate.json
+            ${{ runner.temp }}/oci-out/oci-identity.json
+            ${{ runner.temp }}/oci-out/oci.index.json
+            ${{ runner.temp }}/oci-out/oci.manifest.json
+            ${{ runner.temp }}/oci-out/receipt.json
+            ${{ runner.temp }}/oci-out/evidence.json
+            ${{ runner.temp }}/oci-out/trivy.raw.json
+            ${{ runner.temp }}/oci-out/trivy.stderr.log
+
+      - name: Enforce OCI runtime result
+        if: always()
+        env:
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+        run: test "$RUNTIME_OUTCOME" = success
